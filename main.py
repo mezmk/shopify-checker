@@ -102,6 +102,8 @@ async def check_card_fast(session, api, card, sites):
                         return {"card": card, "status": "Expired", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url}
                     elif 'card_declined' in response_text or 'declined' in response_text:
                         return {"card": card, "status": "Declined", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url}
+                    elif 'graphql_error' in response_text or 'submit_failed' in response_text:
+                        return {"card": card, "status": "Declined", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url}
             except:
                 continue
     return {"card": card, "status": "Declined", "message": "All sites returned NO_PRODUCT", "gateway": "Shopify", "price": "-"}
