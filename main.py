@@ -21,6 +21,7 @@ async def check_cards(data: dict):
     api_name = data.get("api", random.choice(list(SHOPIFY_APIS.keys())))
     concurrency = data.get("concurrency", 50)
     sites = data.get("sites", [])
+    max_rounds = data.get("max_rounds", 3)
     
     api = SHOPIFY_APIS.get(api_name, list(SHOPIFY_APIS.values())[0])
     
@@ -37,11 +38,11 @@ async def check_cards(data: dict):
     for card in cards:
         queue.put_nowait(card)
     
-    semaphore = asyncio.Semaphore(concurrency)
+    sem = asyncio.Semaphore(concurrency)
     
     async def worker():
         nonlocal checked, charged, approved, dead
-        timeout = aiohttp.ClientTimeout(total=30)
+        timeout = aiohttp.ClientTimeout(total=15)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             while not queue.empty():
                 try:
@@ -49,8 +50,8 @@ async def check_cards(data: dict):
                 except asyncio.QueueEmpty:
                     break
                 
-                async with semaphore:
-                    result = await check_card_smart(session, api, card, sites)
+                async with sem:
+                    result = await check_card_fast(session, api, card, sites, max_rounds)
                     results.append(result)
                     checked += 1
                     if result["status"] == "Charged":
@@ -76,10 +77,10 @@ async def check_cards(data: dict):
         "api_used": api_name
     }
 
-async def check_card_smart(session, api, card, sites):
-    """Try each site 10 rounds. If no valid response, return Declined."""
+async def check_card_fast(session, api, card, sites, max_rounds=3):
+    """Try each site up to max_rounds times"""
     
-    for round_num in range(10):
+    for round_num in range(max_rounds):
         shuffled = list(sites)
         random.shuffle(shuffled)
         
@@ -99,17 +100,17 @@ async def check_card_smart(session, api, card, sites):
                         response_text = text.lower()
                     
                     if 'charged' in response_text and 'no_product' not in response_text:
-                        return {"card": card, "status": "Charged", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url, "attempts": round_num * len(sites) + 1}
+                        return {"card": card, "status": "Charged", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url}
                     elif 'approved' in response_text:
-                        return {"card": card, "status": "Approved", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url, "attempts": round_num * len(sites) + 1}
+                        return {"card": card, "status": "Approved", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url}
                     elif 'expired' in response_text:
-                        return {"card": card, "status": "Expired", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url, "attempts": round_num * len(sites) + 1}
+                        return {"card": card, "status": "Expired", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url}
                     elif 'card_declined' in response_text or 'declined' in response_text:
-                        return {"card": card, "status": "Declined", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url, "attempts": round_num * len(sites) + 1}
+                        return {"card": card, "status": "Declined", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url}
             except:
                 continue
     
-    return {"card": card, "status": "Declined", "message": "All sites returned NO_PRODUCT after 10 rounds", "gateway": "Shopify", "price": "-", "attempts": 10 * len(sites)}
+    return {"card": card, "status": "Declined", "message": "All sites returned NO_PRODUCT", "gateway": "Shopify", "price": "-"}
 
 def extract_price(text):
     import re
