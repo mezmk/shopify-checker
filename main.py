@@ -77,44 +77,39 @@ async def check_cards(data: dict):
     }
 
 async def check_card_smart(session, api, card, sites):
-    """Try each site once. If no valid response, return Declined."""
+    """Try each site 10 rounds. If no valid response, return Declined."""
     
-    shuffled = list(sites)
-    random.shuffle(shuffled)
-    
-    for attempt, site_obj in enumerate(shuffled):
-        site_url = site_obj.get("url", site_obj) if isinstance(site_obj, dict) else site_obj
+    for round_num in range(10):
+        shuffled = list(sites)
+        random.shuffle(shuffled)
         
-        try:
-            url = f"{api['url']}?site={site_url}&cc={card}&key={api['key']}"
+        for site_obj in shuffled:
+            site_url = site_obj.get("url", site_obj) if isinstance(site_obj, dict) else site_obj
             
-            async with session.get(url) as resp:
-                text = await resp.text()
+            try:
+                url = f"{api['url']}?site={site_url}&cc={card}&key={api['key']}"
                 
-                try:
-                    data = json.loads(text)
-                    response_text = data.get('Response', text).lower()
-                except:
-                    response_text = text.lower()
-                
-                # Valid final response
-                if 'charged' in response_text and 'no_product' not in response_text:
-                    return {"card": card, "status": "Charged", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url, "attempts": attempt + 1}
-                elif 'approved' in response_text:
-                    return {"card": card, "status": "Approved", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url, "attempts": attempt + 1}
-                elif 'expired' in response_text:
-                    return {"card": card, "status": "Expired", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url, "attempts": attempt + 1}
-                elif 'card_declined' in response_text or 'declined' in response_text:
-                    return {"card": card, "status": "Declined", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url, "attempts": attempt + 1}
-                
-                # NO_PRODUCT etc -> try next site
+                async with session.get(url) as resp:
+                    text = await resp.text()
+                    
+                    try:
+                        data = json.loads(text)
+                        response_text = data.get('Response', text).lower()
+                    except:
+                        response_text = text.lower()
+                    
+                    if 'charged' in response_text and 'no_product' not in response_text:
+                        return {"card": card, "status": "Charged", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url, "attempts": round_num * len(sites) + 1}
+                    elif 'approved' in response_text:
+                        return {"card": card, "status": "Approved", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url, "attempts": round_num * len(sites) + 1}
+                    elif 'expired' in response_text:
+                        return {"card": card, "status": "Expired", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url, "attempts": round_num * len(sites) + 1}
+                    elif 'card_declined' in response_text or 'declined' in response_text:
+                        return {"card": card, "status": "Declined", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url, "attempts": round_num * len(sites) + 1}
+            except:
                 continue
-        
-        except Exception as e:
-            continue
     
-    # Tried all sites, none returned valid response
-    return {"card": card, "status": "Declined", "message": "All sites returned NO_PRODUCT", "gateway": "Shopify", "price": "-", "attempts": len(shuffled)}
+    return {"card": card, "status": "Declined", "message": "All sites returned NO_PRODUCT after 10 rounds", "gateway": "Shopify", "price": "-", "attempts": 10 * len(sites)}
 
 def extract_price(text):
     import re
