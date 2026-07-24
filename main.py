@@ -22,7 +22,7 @@ async def check_cards(data: dict):
     api_name = data.get("api", random.choice(list(SHOPIFY_APIS.keys())))
     concurrency = data.get("concurrency", 50)
     sites = data.get("sites", [])
-    max_rounds = data.get("max_rounds", 3)
+    max_rounds = data.get("max_rounds", 10)
     batch_size = data.get("batch_size", 100)
     
     api = SHOPIFY_APIS.get(api_name, list(SHOPIFY_APIS.values())[0])
@@ -113,7 +113,7 @@ async def check_cards_old(data: dict):
     api_name = data.get("api", random.choice(list(SHOPIFY_APIS.keys())))
     concurrency = data.get("concurrency", 50)
     sites = data.get("sites", [])
-    max_rounds = data.get("max_rounds", 3)
+    max_rounds = data.get("max_rounds", 10)
     
     api = SHOPIFY_APIS.get(api_name, list(SHOPIFY_APIS.values())[0])
     if not sites:
