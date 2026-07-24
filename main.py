@@ -14,8 +14,8 @@ SHOPIFY_APIS = {
     "api2": {"url": "https://shimmering-celebration-production-7dd0.up.railway.app/shopify", "key": "AnonShopii2026!"},
 }
 
-# Load sites from sites_price.json
-SITES_FILE = os.path.join(os.path.dirname(__file__), "sites_price.json")
+# Load sites from sites_price.json (same directory as server)
+SITES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sites_price.json")
 
 def load_sites():
     try:
