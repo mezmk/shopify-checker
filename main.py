@@ -78,7 +78,9 @@ async def check_cards(data: dict):
     }
 
 async def check_card_fast(session, api, card, sites):
-    for round_num in range(10):
+    round_num = 0
+    while True:
+        round_num += 1
         shuffled = list(sites)
         random.shuffle(shuffled)
         for site_obj in shuffled:
