@@ -31,7 +31,7 @@ async def check_cards(data: dict):
     proxy = data.get("proxy", "")
     api_name = data.get("api", random.choice(list(SHOPIFY_APIS.keys())))
     concurrency = data.get("concurrency", 50)
-    sites = data.get("sites", DEFAULT_SITES)[:8]
+    sites = data.get("sites", DEFAULT_SITES)
     
     api = SHOPIFY_APIS.get(api_name, list(SHOPIFY_APIS.values())[0])
     
